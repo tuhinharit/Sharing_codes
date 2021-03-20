@@ -1,0 +1,57 @@
+# code for 1:1 matching
+
+encode match_var1, generate (match_var1)
+encode match_var2, generate (match_var2)
+
+global matching_control match_var1 match_var2
+
+#first pscore guess controlled for each year
+logit treatment_flag $matching_control i.year 
+predict pscore
+
+#manual pscore calc with hard control for matching for each date
+gen pscore2 = datadate + pscore 
+
+psmatch2 treated, pscore(pscore2)  outcome($matching_control)  neighbor(1) noreplacement
+gen pair = _id if _treated==0
+replace pair = _n1 if _treated==1
+bysort pair: egen paircount = count(pair)
+
+#each pair above is a match for each datadate. Note this might create pairs with more than m:n matching. 
+
+# remove all obs which were not paired or pscore was not generated due to missing values
+sort paircount pair
+gen negpost = -post
+sort pair negpost
+drop negpost
+drop if paircount ==1 | paircount ==. | paircount ==0
+
+#drop pairs with more than one treated variable
+gen negtreat = -treated
+sort pair negtreat
+by pair: egen sumtreat = sum(treated)
+drop if sumtreat > paircount
+
+sort pair negtreat gvkey
+drop if sumtreat ==0
+count if sumtreat !=1
+count if paircount == sumtreat
+drop if sumtreat !=1
+drop negtreat
+
+# check below that obs in each pair have same datadate, count of temp!= 0 should equal count temp==. 
+
+gen temp1 = -treated
+sort pair temp1
+gen temp = 0
+by pair: replace temp = datadate - datadate[_n-1]
+
+count if temp ==.
+count if temp !=0
+count if temp ==0
+
+#in the regression, control for pairs
+xtset gvkey datadate
+quietly reghdfe zer_reac i.post##i.treated if zer_reac <= 5, a(datadate pair) vce(cluster gvkey)
+est tab , k(post##treated) t
+
